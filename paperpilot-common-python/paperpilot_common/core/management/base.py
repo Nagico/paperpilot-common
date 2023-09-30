@@ -13,6 +13,7 @@ import paperpilot_common
 from paperpilot_common.core import checks
 from paperpilot_common.core.exceptions import ImproperlyConfigured
 from paperpilot_common.core.management.color import color_style, no_style
+from paperpilot_common.db import tortoise_init
 
 ALL_CHECKS = "__all__"
 
@@ -429,6 +430,7 @@ class BaseCommand:
                 self.check(tags=self.requires_system_checks)
         if self.requires_migrations_checks:
             self.check_migrations()
+        tortoise_init()
         output = self.handle(*args, **options)
         if output:
             if self.output_transaction:

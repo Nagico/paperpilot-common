@@ -1,5 +1,3 @@
-import logging
-
 import grpc.aio
 from asgiref.sync import ThreadSensitiveContext
 
