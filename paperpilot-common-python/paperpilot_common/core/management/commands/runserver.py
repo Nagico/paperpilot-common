@@ -12,6 +12,7 @@ from paperpilot_common.core.management.base import BaseCommand, CommandError
 from paperpilot_common.core.servers.basegrpc import get_internal_grpc_application, run
 from paperpilot_common.utils import autoreload
 from paperpilot_common.utils.regex_helper import _lazy_re_compile
+from paperpilot_common.utils.uri import get_existed_file_path
 
 naiveip_re = _lazy_re_compile(
     r"""^(?:
@@ -34,18 +35,22 @@ class Command(BaseCommand):
     suppressed_base_arguments = {"--verbosity", "--traceback"}
 
     default_addr = "127.0.0.1"
-    default_addr_ipv6 = "::1"
     default_port = "8000"
     protocol = "grpc"
+
+    use_ssl = False
+
+    def __init__(self, stdout=None, stderr=None, no_color=False, force_color=False):
+        super().__init__(stdout, stderr, no_color, force_color)
+        self.creds = None
 
     def add_arguments(self, parser):
         parser.add_argument("addrport", nargs="?", help="Optional port number, or ipaddr:port")
         parser.add_argument(
-            "--ipv6",
-            "-6",
+            "--ssl",
             action="store_true",
-            dest="use_ipv6",
-            help="Tells Paperpilot to use an IPv6 address.",
+            dest="use_ssl",
+            help="Tells Paperpilot to enable ssl.",
         )
         parser.add_argument(
             "--nothreading",
@@ -74,10 +79,28 @@ class Command(BaseCommand):
         super().execute(*args, **options)
 
     def handle(self, *args, **options):
-        self.use_ipv6 = options["use_ipv6"]
-        if self.use_ipv6 and not socket.has_ipv6:
-            raise CommandError("Your Python does not support IPv6.")
-        self._raw_ipv6 = False
+        self.use_ssl = options["use_ssl"]
+        if self.use_ssl:
+            key_path = get_existed_file_path(getattr(settings, "GRPC_SSL_KEY", None))
+            cert_path = get_existed_file_path(getattr(settings, "GRPC_SSL_CERT", None))
+
+            if not key_path or not cert_path:
+                raise CommandError("You must set GRPC_SSL_KEY and GRPC_SSL_CERT in your settings before using ssl.")
+
+            with open(key_path, "rb") as f:
+                private_key = f.read()
+            with open(cert_path, "rb") as f:
+                certificate_chain = f.read()
+
+            self.creds = grpc.ssl_server_credentials(
+                [
+                    (
+                        private_key,
+                        certificate_chain,
+                    ),
+                ]
+            )
+
         if not options["addrport"]:
             self.addr = ""
             self.port = self.default_port
@@ -88,16 +111,8 @@ class Command(BaseCommand):
             self.addr, _ipv4, _ipv6, _fqdn, self.port = m.groups()
             if not self.port.isdigit():
                 raise CommandError("%r is not a valid port number." % self.port)
-            if self.addr:
-                if _ipv6:
-                    self.addr = self.addr[1:-1]
-                    self.use_ipv6 = True
-                    self._raw_ipv6 = True
-                elif self.use_ipv6 and not _fqdn:
-                    raise CommandError('"%s" is not a valid IPv6 address.' % self.addr)
         if not self.addr:
-            self.addr = self.default_addr_ipv6 if self.use_ipv6 else self.default_addr
-            self._raw_ipv6 = self.use_ipv6
+            self.addr = self.default_addr
         self.run(**options)
 
     def get_handler(self, *args, **options):
@@ -135,7 +150,8 @@ class Command(BaseCommand):
                 self.addr,
                 int(self.port),
                 handler,
-                ipv6=self.use_ipv6,
+                ssl=self.use_ssl,
+                creds=self.creds,
                 threading=threading,
                 on_bind=self.on_bind,
                 server_cls=self.server_cls,
@@ -162,9 +178,7 @@ class Command(BaseCommand):
     def on_bind(self, server_port):
         quit_command = "CTRL-BREAK" if sys.platform == "win32" else "CONTROL-C"
 
-        if self._raw_ipv6:
-            addr = f"[{self.addr}]"
-        elif self.addr == "0":
+        if self.addr == "0":
             addr = "0.0.0.0"
         else:
             addr = self.addr

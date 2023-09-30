@@ -229,11 +229,13 @@ async def run_async(
     addr: str,
     port: int,
     grpc_handler: GrpcHandler,
-    ipv6=False,
+    ssl=False,
+    creds=None,
     threading=False,
     on_bind=None,
     server_cls=None,
 ):
+    address = f"{addr}:{port}"
     if threading:
         server_cls = type("GRPCServer", (socketserver.ThreadingMixIn, server_cls), {})
     else:
@@ -260,9 +262,14 @@ async def run_async(
     # bind apps
     grpc_handler.bind_apps(server)
 
-    server.add_insecure_port(f"{addr}:{port}")
-    await server.start()
-    logger.info(f"server run in {addr}:{port}")
+    if ssl:
+        server.add_secure_port(address, creds)
+        await server.start()
+        logger.info(f"server run in {addr}:{port} with ssl")
+    else:
+        server.add_insecure_port(address)
+        await server.start()
+        logger.info(f"server run in {addr}:{port}")
     await server.wait_for_termination()
 
 
@@ -270,14 +277,15 @@ def run(
     addr,
     port,
     grpc_handler,
-    ipv6=False,
+    ssl=False,
+    creds=None,
     threading=False,
     on_bind=None,
     server_cls=None,
 ):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    main_task = asyncio.ensure_future(run_async(addr, port, grpc_handler, ipv6, threading, on_bind, server_cls))
+    main_task = asyncio.ensure_future(run_async(addr, port, grpc_handler, ssl, creds, threading, on_bind, server_cls))
     try:
         loop.run_until_complete(main_task)
     except KeyboardInterrupt:
